@@ -95,10 +95,19 @@ Output STRICT JSON only. No markdown. No extra text.
 JSON format:
 {
   "results": {
-    "<constraint_id>": {"passed": true/false, "reason": "...", "confidence": 0.0-1.0},
+    "<constraint_id>": {
+      "passed": true/false,
+      "reason": "...",
+      "confidence": 0.0-1.0,
+      "improvement_suggestion": "specific actionable edit suggestion"
+    },
     ...
   }
 }
+
+Rules for improvement_suggestion:
+- If passed=true: can be empty string.
+- If passed=false: must provide a concrete, image-editable suggestion.
 """.strip()
 
 USER_TEMPLATE_ALL = """
@@ -334,11 +343,13 @@ class LLMJudgeBackend(JudgeBackend):
             passed = _require_bool(entry, "passed")
             reason = _require_str(entry, "reason")
             confidence = _require_float_01(entry, "confidence")
+            improvement_suggestion = str(entry.get("improvement_suggestion", "") or "").strip()
 
             out[cid] = {
                 "passed": passed,
                 "reason": reason,
                 "confidence": confidence,
+                "improvement_suggestion": improvement_suggestion,
             }
 
         if miss:
@@ -358,7 +369,15 @@ class LLMJudgeBackend(JudgeBackend):
         try:
             shown = 0
             for cid, v in out.items():
-                _p(f"cid={cid} passed={v.get('passed')} conf={v.get('confidence')} reason={_truncate(v.get('reason'), 140)}")
+                _p(
+                    "cid={} passed={} conf={} reason={} suggestion={}".format(
+                        cid,
+                        v.get("passed"),
+                        v.get("confidence"),
+                        _truncate(v.get("reason"), 120),
+                        _truncate(v.get("improvement_suggestion"), 120),
+                    )
+                )
                 shown += 1
                 if shown >= 5:
                     break
