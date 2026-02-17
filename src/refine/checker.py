@@ -23,7 +23,7 @@ This supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Any, List
+from typing import Dict, Optional, Protocol, Any, List, Tuple
 
 from src.io.schemas import Constraint, ConstraintType
 
@@ -184,6 +184,59 @@ class Checker:
 
         # Placeholder fallback
         return {c.id: False for c in constraints}
+
+    def check_all_with_feedback(
+        self,
+        prompt_text: str,
+        artifact: Any,
+        constraints: List[Constraint],
+        oracle_status: Optional[Dict[str, bool]] = None,
+    ) -> Tuple[Dict[str, bool], Dict[str, str]]:
+        """
+        Returns:
+            - status: Dict[constraint_id, bool]
+            - feedback: Dict[constraint_id, str] (judge reason / improvement suggestion)
+
+        This keeps old bool-only behavior for scheduling while exposing
+        detailed judge feedback to downstream instruction generation.
+        """
+
+        if oracle_status is not None:
+            status = {c.id: bool(oracle_status.get(c.id, False)) for c in constraints}
+            return status, {c.id: "" for c in constraints}
+
+        # Default conservative output
+        status: Dict[str, bool] = {c.id: False for c in constraints}
+        feedback: Dict[str, str] = {c.id: "" for c in constraints}
+
+        if self.backend is None:
+            return status, feedback
+
+        try:
+            result = self.backend.judge_all(
+                prompt_text=prompt_text,
+                artifact=artifact,
+                constraints=constraints,
+            )
+        except Exception:
+            return status, feedback
+
+        if not isinstance(result, dict):
+            return status, feedback
+
+        for c in constraints:
+            info = result.get(c.id, {})
+            if not isinstance(info, dict):
+                continue
+
+            status[c.id] = bool(info.get("passed", False))
+
+            # Prefer explicit improvement_suggestion; fallback to reason.
+            suggestion = str(info.get("improvement_suggestion", "") or "").strip()
+            reason = str(info.get("reason", "") or "").strip()
+            feedback[c.id] = suggestion or reason
+
+        return status, feedback
 
     # --------------------------------------------------------
     # LOCAL evaluation + instruction generation

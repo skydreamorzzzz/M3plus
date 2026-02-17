@@ -105,7 +105,7 @@ def run_refine_loop(
     # Initial global evaluation (constraints + quality)
     # ============================================================
 
-    status_best = checker.check_all(
+    status_best, feedback_best = checker.check_all_with_feedback(
         prompt_text=item.text,
         artifact=best,
         constraints=constraints,
@@ -171,7 +171,16 @@ def run_refine_loop(
             
             # Generate constraint-fixing instruction
             from src.refine.checker import _mk_instruction
-            edit_instruction = _mk_instruction(constraint)
+            base_instruction = _mk_instruction(constraint)
+            judge_feedback = (feedback_best.get(selected, "") or "").strip()
+
+            if judge_feedback:
+                edit_instruction = (
+                    f"{base_instruction} "
+                    f"Address this judge feedback specifically: {judge_feedback}"
+                )
+            else:
+                edit_instruction = base_instruction
             is_quality_round = False
         
         else:
@@ -206,7 +215,7 @@ def run_refine_loop(
         # Global evaluation of candidate (constraints + quality)
         # ============================================================
 
-        status_candidate = checker.check_all(
+        status_candidate, feedback_candidate = checker.check_all_with_feedback(
             prompt_text=item.text,
             artifact=candidate,
             constraints=constraints,
@@ -255,6 +264,7 @@ def run_refine_loop(
         if accepted:
             best = candidate
             status_best = status_candidate
+            feedback_best = feedback_candidate
             quality_best = quality_candidate
         else:
             conflict_count += 1
