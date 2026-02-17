@@ -244,7 +244,7 @@ class WanxImageEditClient(_WanxBaseClient):
         """
         Edit image using instruction.
 
-        - qwen-image-edit*: DashScope compatible-mode Images API (supports local files)
+        - qwen-image-edit*: try OpenAI-compatible Images API first, then fallback to native API
         - other models: keep legacy Wanx async Image2Image flow (URL input only)
         """
         # Determine log tag based on model
@@ -258,7 +258,11 @@ class WanxImageEditClient(_WanxBaseClient):
         print(f"[{log_tag}] Input: {image_path}")
 
         if self.model.startswith("qwen-image-edit"):
-            return self._edit_via_compatible_mode(image_path=image_path, instruction=instruction, out_path=out_path, log_tag=log_tag)
+            try:
+                return self._edit_via_openai_compatible(image_path=image_path, instruction=instruction, out_path=out_path, log_tag=log_tag)
+            except Exception as e:
+                print(f"[{log_tag}] compatible Images API failed, fallback to native API: {type(e).__name__}: {e}")
+                return self._edit_via_compatible_mode(image_path=image_path, instruction=instruction, out_path=out_path, log_tag=log_tag)
 
         return self._edit_via_legacy_wanx(image_path=image_path, instruction=instruction, out_path=out_path, log_tag=log_tag)
 
@@ -339,6 +343,59 @@ class WanxImageEditClient(_WanxBaseClient):
                 if attempt >= self.max_retries:
                     raise
                 print(f"[{log_tag}] Retry {attempt+1}/{self.max_retries} after error: {e}")
+                time.sleep(2)
+
+        raise RuntimeError(f"[{log_tag}] Failed after retries.")
+
+    def _edit_via_openai_compatible(self, image_path: Path, instruction: str, out_path: Path, log_tag: str = "QWEN-IMAGE-EDIT") -> Path:
+        """Use OpenAI-compatible /images/edits endpoint for qwen-image-edit series."""
+        url = f"{self.base_url.rstrip('/')}/compatible-mode/v1/images/edits"
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                image_file = self._prepare_image_file(image_path)
+                try:
+                    files = {
+                        "image": image_file,
+                    }
+                    data = {
+                        "model": self.model,
+                        "prompt": instruction,
+                    }
+                    headers = {
+                        "Authorization": f"Bearer {self.api_key}",
+                    }
+
+                    print(f"[{log_tag}] Requesting edit via compatible Images API...")
+                    resp = requests.post(url, headers=headers, data=data, files=files, timeout=self.timeout)
+                finally:
+                    if hasattr(image_file, "close"):
+                        image_file.close()
+
+                if resp.status_code >= 400:
+                    _print_http_error(f"[{log_tag}]", resp)
+                    resp.raise_for_status()
+
+                result = resp.json()
+                image_url = (result.get("data", [{}])[0].get("url"))
+                if not image_url:
+                    raise RuntimeError(f"[{log_tag}] No image URL in compatible response: {result}")
+
+                print(f"[{log_tag}] Downloading edited image from: {image_url}")
+                img = requests.get(image_url, timeout=60)
+                if img.status_code >= 400:
+                    _print_http_error(f"[{log_tag}-DL]", img)
+                    img.raise_for_status()
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(img.content)
+
+                print(f"[{log_tag}] Edit completed: {out_path}")
+                return out_path
+
+            except Exception:
+                if attempt >= self.max_retries:
+                    raise
                 time.sleep(2)
 
         raise RuntimeError(f"[{log_tag}] Failed after retries.")
