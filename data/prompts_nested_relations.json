@@ -1,0 +1,14 @@
+[
+  {
+    "prompt_id": "nested_001_vertical_lateral_stack",
+    "text": "A small red cube is on top of a large blue cube. The blue cube is on top of a green cylinder. The green cylinder is under a yellow sphere. The yellow sphere is to the left of a black cone. The black cone is slightly taller than the entire stack."
+  },
+  {
+    "prompt_id": "nested_002_symmetric_asymmetric_tables",
+    "text": "Two identical white tables are placed side by side. On the left table, there is a blue box. On top of the blue box, there is a red ball. Inside the blue box, there is a small green cube. The right table has a yellow box, but nothing on top of it."
+  },
+  {
+    "prompt_id": "nested_003_dual_chain_inside_behind",
+    "text": "A tall transparent glass is standing on a wooden table. Inside the glass, there is a small red cube. On top of the red cube, there is a tiny blue sphere. Behind the glass, there is a green book. On top of the green book, there is a yellow key."
+  }
+]
