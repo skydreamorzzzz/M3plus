@@ -98,6 +98,11 @@ class RunSummary:
     conflict_count: int
     oscillation_detected: bool
     protection_rate: float
+
+    # Stability-related metrics
+    global_score_oscillation: float = 0.0   # Mean absolute delta of global pass score across rounds
+    constraint_flip_count: int = 0          # Total pass/fail flips across all constraints
+    stable_convergence_rounds: int = 0      # Trailing rounds with unchanged global status
     
     # Quality-related fields
     final_quality_score: float = 0.0      # Final image quality score (0-1)
