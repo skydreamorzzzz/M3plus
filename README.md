@@ -99,6 +99,7 @@ Compare:
 - final pass
 - conflict reduction
 - scheduling efficiency
+- global score oscillation / constraint flips / stable convergence rounds (in summary.csv)
 
 ---
 

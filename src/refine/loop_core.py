@@ -21,6 +21,9 @@ from src.refine.checker import Checker
 from src.refine.editor import Editor, ArtifactHandle
 from src.refine.verifier import Verifier, Decision
 from src.scheduler.conflict_matrix import ConflictMatrix
+from src.eval.oscillation import detect_oscillation
+from src.eval.protection import constraint_protection_rate
+from src.eval.stability import compute_stability_indices
 
 
 # ============================================================
@@ -311,13 +314,20 @@ def run_refine_loop(
     final_pass = _all_pass(status_best)
     quality_improved = any(t.quality_improvement for t in traces)
 
+    oscillation = detect_oscillation(traces)
+    protection_rate = constraint_protection_rate(traces)
+    stability = compute_stability_indices(traces)
+
     summary = RunSummary(
         prompt_id=item.prompt_id,
         total_rounds=len(traces),
         final_pass=bool(final_pass),
         conflict_count=int(conflict_count),
-        oscillation_detected=False,
-        protection_rate=1.0,
+        oscillation_detected=oscillation.has_oscillation,
+        protection_rate=protection_rate,
+        global_score_oscillation=stability.global_score_oscillation,
+        constraint_flip_count=stability.constraint_flip_count,
+        stable_convergence_rounds=stability.stable_convergence_rounds,
         final_quality_score=quality_best,
         quality_improved=quality_improved,
     )
