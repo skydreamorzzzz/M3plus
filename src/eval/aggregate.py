@@ -10,6 +10,9 @@ Field names align with eval/metrics.py:
 - conflict_rate
 - oscillation_rate
 - protection_rate
+- avg_global_score_oscillation
+- avg_constraint_flip_count
+- avg_stable_convergence_rounds
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ def aggregate_metrics(results: List[RunSummary]) -> Dict[str, float]:
             "conflict_rate": 0.0,
             "oscillation_rate": 0.0,
             "protection_rate": 0.0,
+            "avg_global_score_oscillation": 0.0,
+            "avg_constraint_flip_count": 0.0,
+            "avg_stable_convergence_rounds": 0.0,
         }
 
     n = len(results)
@@ -35,6 +41,9 @@ def aggregate_metrics(results: List[RunSummary]) -> Dict[str, float]:
     conflict_rate = sum(float(r.conflict_count) for r in results) / n
     oscillation_rate = sum(1 for r in results if bool(r.oscillation_detected)) / n
     protection_rate = sum(float(r.protection_rate) for r in results) / n
+    avg_global_score_oscillation = sum(float(r.global_score_oscillation) for r in results) / n
+    avg_constraint_flip_count = sum(float(r.constraint_flip_count) for r in results) / n
+    avg_stable_convergence_rounds = sum(float(r.stable_convergence_rounds) for r in results) / n
 
     return {
         "pass_rate": float(pass_rate),
@@ -42,4 +51,7 @@ def aggregate_metrics(results: List[RunSummary]) -> Dict[str, float]:
         "conflict_rate": float(conflict_rate),
         "oscillation_rate": float(oscillation_rate),
         "protection_rate": float(protection_rate),
+        "avg_global_score_oscillation": float(avg_global_score_oscillation),
+        "avg_constraint_flip_count": float(avg_constraint_flip_count),
+        "avg_stable_convergence_rounds": float(avg_stable_convergence_rounds),
     }
