@@ -107,3 +107,44 @@ class RunSummary:
     # Quality-related fields
     final_quality_score: float = 0.0      # Final image quality score (0-1)
     quality_improved: bool = False        # Whether quality improvement was performed
+
+
+# ---------- 新增：调度决策数据 ----------
+
+@dataclass
+class SchedulingDecision:
+    """调度决策记录（用于分析调度策略）"""
+    prompt_id: str
+    round_id: int
+    strategy: str  # linear | greedy_static | greedy_adaptive
+    
+    # 候选约束
+    candidate_constraints: List[str]
+    
+    # 得分信息
+    candidate_scores: Dict[str, float]  # {constraint_id: score}
+    
+    # 选择结果
+    selected_constraint: str
+    selection_reason: str  # type_priority | adaptive_score | linear_order
+    
+    # 额外信息（可选）
+    base_priorities: Optional[Dict[str, float]] = None  # {constraint_id: priority}
+    conflict_risks: Optional[Dict[str, float]] = None   # {constraint_id: risk}
+
+
+# ---------- 新增：冲突演化数据 ----------
+
+@dataclass
+class ConflictEvolution:
+    """冲突演化记录（用于分析冲突动态）"""
+    prompt_id: str
+    round_id: int
+    constraint_id: str
+    
+    # 冲突统计
+    conflict_count: int  # 该约束引发的总冲突次数
+    conflict_risk: float  # 归一化风险值（0-1）
+    
+    # 冲突详情
+    conflicts_with: Dict[str, int]  # {other_constraint_id: conflict_count}

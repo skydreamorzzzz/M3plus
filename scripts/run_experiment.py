@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
 # ---------------- Schema / Graph ----------------
 from src.io.schemas import PromptItem, Constraint
 from src.graph.build_drg import build_drg
+from src.graph.build_drg_hybrid import build_drg_hybrid, HybridDRGParams
 from src.graph.validate_graph import ensure_dag
 
 # ---------------- Clients ----------------
@@ -43,6 +44,7 @@ from src.config.model_config import (
 
 # ---------------- LLM Prompts ----------------
 from src.llm.prompts.extract_constraints import extract_constraints
+from src.llm.prompts.extract_constraints_minimal import extract_constraints_minimal
 from src.llm.prompts.judge_constraint import LLMJudgeBackend
 from src.llm.prompts.verify_pair import LLMVerifyBackend
 
@@ -55,6 +57,8 @@ from src.refine.loop_core import run_refine_loop, LoopParams
 
 # ---------------- Scheduler ----------------
 from src.scheduler.linear_scheduler import LinearScheduler
+from src.scheduler.greedy_static_scheduler import GreedyStaticScheduler
+from src.scheduler.greedy_adaptive_scheduler import GreedyAdaptiveScheduler
 from src.scheduler.dag_topo import DagTopoScheduler, DagTopoParams
 
 # ---------------- Eval ----------------
@@ -140,6 +144,10 @@ def _build_scheduler(name: str):
     n = (name or "").strip().lower()
     if n == "linear":
         return LinearScheduler()
+    if n == "greedy_static":
+        return GreedyStaticScheduler()
+    if n == "greedy_adaptive":
+        return GreedyAdaptiveScheduler()
     if n == "topo":
         return DagTopoScheduler(params=DagTopoParams(use_conflict_risk=False))
     if n in ("topo_conflict", "topo+conflict"):
@@ -155,10 +163,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--exp_id", type=str, default="")
-    parser.add_argument("--strategies", type=str, default="linear,topo,topo_conflict")
+    parser.add_argument("--strategies", type=str, default="linear,greedy_static,greedy_adaptive")
     parser.add_argument("--backend", type=str, default="mock")   # mock | openai
     parser.add_argument("--max_rounds", type=int, default=6)
     parser.add_argument("--dry_run", type=int, default=1)
+    parser.add_argument("--graph_mode", type=str, default="hybrid", choices=["rule", "hybrid"])
+    parser.add_argument("--extract_mode", type=str, default="minimal", choices=["full", "minimal"])  # 新增：约束提取模式
     args = parser.parse_args()
 
     # Load .env file (if exists)
@@ -263,6 +273,8 @@ def main():
         trace_rows: List[Dict[str, Any]] = []
         summary_rows: List[Dict[str, Any]] = []
         summary_objects: List[RunSummary] = []  # Keep RunSummary objects for metrics
+        scheduling_decision_rows: List[Dict[str, Any]] = []  # 新增：调度决策
+        conflict_evolution_rows: List[Dict[str, Any]] = []   # 新增：冲突演化
 
         for item_data in prompts:
 
@@ -274,7 +286,15 @@ def main():
             try:
                 # ---------------- Phase 1: Planner ----------------
                 try:
-                    constraints = extract_constraints(text_client, text)
+                    _log("PLANNER", f"{pid}: extracting constraints (mode={args.extract_mode})...")
+                    
+                    if args.extract_mode == "minimal":
+                        # 极简模式：减少LLM输出长度
+                        constraints = extract_constraints_minimal(text_client, text)
+                    else:
+                        # 完整模式：原有逻辑
+                        constraints = extract_constraints(text_client, text)
+                    
                     _log("PLANNER", f"{pid}: extracted {len(constraints)} constraints")
                 except Exception as e:
                     error_registry.record(pid, "extract_constraints", e, traceback.format_exc())
@@ -283,9 +303,23 @@ def main():
 
                 # ---------------- Phase 2: Graph ----------------
                 try:
-                    full_graph = build_drg(constraints)
+                    _log("GRAPH", f"{pid}: building graph (mode={args.graph_mode})...")
+                    
+                    if args.graph_mode == "hybrid":
+                        # 混合模式：规则 + LLM补充
+                        full_graph = build_drg_hybrid(
+                            constraints=constraints,
+                            client=text_client if args.backend != "mock" else None,
+                            params=HybridDRGParams(
+                                use_llm_for_uncertain=(args.backend != "mock"),
+                            ),
+                        )
+                    else:
+                        # 纯规则模式（原有逻辑）
+                        full_graph = build_drg(constraints)
+                    
                     dep_graph, _ = ensure_dag(full_graph)
-                    _log("GRAPH", f"{pid}: graph nodes={len(dep_graph.nodes)}")
+                    _log("GRAPH", f"{pid}: graph nodes={len(dep_graph.nodes)}, edges={len(dep_graph.edges)}")
                 except Exception as e:
                     error_registry.record(pid, "build_graph", e, traceback.format_exc())
                     _log("ERROR", f"{pid}: Failed at build_graph: {e}")
@@ -321,7 +355,7 @@ def main():
                 try:
                     _log("LOOP", f"{pid}: starting refine loop")
 
-                    best, traces, summary = run_refine_loop(
+                    best, traces, summary, sched_decisions, conflict_evols = run_refine_loop(
                         item=prompt_item,
                         scheduler=scheduler,
                         checker=checker,
@@ -330,6 +364,7 @@ def main():
                         params=LoopParams(max_rounds=args.max_rounds),
                         initial_artifact=artifact,
                         out_dir=prompt_dir,
+                        strategy_name=strategy_name,  # 传入策略名称
                     )
 
                     _log(
@@ -345,6 +380,24 @@ def main():
 
                     summary_rows.append(summary.__dict__)
                     summary_objects.append(summary)  # Keep object for metrics
+                    
+                    # 新增：记录调度决策和冲突演化
+                    for sd in sched_decisions:
+                        # 将嵌套字典转为JSON字符串
+                        row = sd.__dict__.copy()
+                        import json
+                        row['candidate_constraints'] = json.dumps(row['candidate_constraints'])
+                        row['candidate_scores'] = json.dumps(row['candidate_scores'])
+                        if row.get('base_priorities'):
+                            row['base_priorities'] = json.dumps(row['base_priorities'])
+                        if row.get('conflict_risks'):
+                            row['conflict_risks'] = json.dumps(row['conflict_risks'])
+                        scheduling_decision_rows.append(row)
+                    
+                    for ce in conflict_evols:
+                        row = ce.__dict__.copy()
+                        row['conflicts_with'] = json.dumps(row['conflicts_with'])
+                        conflict_evolution_rows.append(row)
                     
                     # Update global success count (only once per prompt, not per strategy)
                     if strategy_name == strategy_list[0]:
@@ -381,16 +434,48 @@ def main():
                 summary_rows,
                 fieldnames=list(summary_rows[0].keys()),
             )
+        
+        # 新增：写入调度决策
+        if scheduling_decision_rows:
+            _write_csv(
+                out_dir / "scheduling_decisions.csv",
+                scheduling_decision_rows,
+                fieldnames=list(scheduling_decision_rows[0].keys()),
+            )
+        
+        # 新增：写入冲突演化
+        if conflict_evolution_rows:
+            _write_csv(
+                out_dir / "conflict_evolution.csv",
+                conflict_evolution_rows,
+                fieldnames=list(conflict_evolution_rows[0].keys()),
+            )
 
         # ---------------- Compute Strategy Metrics ----------------
         n_completed = len(summary_objects)
         n_failed = len([e for e in error_registry.errors if strategy_name == strategy_list[0]])  # Only count in first strategy
         metrics = aggregate_metrics(summary_objects)
+        
+        # 新增：per-prompt 数据
+        per_prompt_data = []
+        for s in summary_objects:
+            per_prompt_data.append({
+                "prompt_id": s.prompt_id,
+                "total_rounds": s.total_rounds,
+                "final_pass": s.final_pass,
+                "conflict_count": s.conflict_count,
+                "oscillation_detected": s.oscillation_detected,
+                "protection_rate": s.protection_rate,
+                "global_score_oscillation": s.global_score_oscillation,
+                "constraint_flip_count": s.constraint_flip_count,
+                "stable_convergence_rounds": s.stable_convergence_rounds,
+            })
 
         aggregate_all["strategies"][strategy_name] = {
             "n_completed": n_completed,
             "n_failed": n_failed if strategy_name == strategy_list[0] else 0,
             "metrics": metrics,
+            "per_prompt": per_prompt_data,  # 新增
         }
 
         _log("METRICS", f"{strategy_name}: pass_rate={metrics['pass_rate']:.2%}, avg_rounds={metrics['avg_rounds']:.2f}")
